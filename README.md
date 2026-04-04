@@ -1,6 +1,8 @@
 # LightboX
 A Vanilla Javascript plugin lightboX  &amp; only 15kb.
 
+**滚蛋吧jQuery**
+
 不需要任何依赖库的原生JS灯箱Lightbox插件
 
 Language：简体中文 | [English](README-en.md)
