@@ -1,4 +1,4 @@
-# lightboX
+# LightboX
 
 A native JS lightbox plugin that doesn't require any dependent libraries & only 15kb.
 
