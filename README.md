@@ -5,6 +5,8 @@ A Vanilla Javascript plugin lightboX  &amp; only 15kb.
 
 不需要任何依赖库的原生JS灯箱Lightbox插件
 
+[Demo预览](https://r2-slow.lkin.cn/web/demo/lightbox-demo.html)
+
 Language：简体中文 | [English](README-en.md)
 
 ## 食用说明
