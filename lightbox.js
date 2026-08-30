@@ -1,8 +1,7 @@
-// 图片灯箱
 (function (global) {
     'use strict';
 
-    // ---------- 状态变量 ----------
+    // ---------- 全局状态 ----------
     let activeLightbox = false;
     let isAnimating = false;
     let lightboxElement = null;
@@ -12,7 +11,7 @@
     let resizeHandler = null;
     let escHandler = null;
 
-    // 缩放/拖拽相关状态
+    // ---------- 缩放/拖拽状态 ----------
     let isDragging = false;
     let dragStart = { x: 0, y: 0 };
     let translate = { x: 0, y: 0 };
@@ -21,16 +20,15 @@
     let initialScale = 1;
     let lastTouchCount = 0;
     let isResetting = false;
-    let isZoomAnimating = false;   //动画缩放进行中
+    let isZoomAnimating = false;
 
-    // 移动端双击检测
     let lastTap = 0;
     let tapTimer = null;
 
     const MIN_SCALE = 1;
     const MAX_SCALE = 5;
 
-    // ---------- 辅助函数 ----------
+    // ---------- 工具函数 ----------
     function getRect(el) {
         if (!el) return { top: 0, left: 0, width: 0, height: 0 };
         const rect = el.getBoundingClientRect();
@@ -59,7 +57,7 @@
         return { left: (viewportW - finalWidth) / 2, top: (viewportH - finalHeight) / 2 };
     }
 
-    // 无动画缩放（用于实时交互：滚轮、双指）
+    // ---------- 缩放/拖拽核心 ----------
     function zoomAtPoint(newScale, clientX, clientY) {
         if (!cloneImg) return;
         newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, newScale));
@@ -83,14 +81,12 @@
         applyTransform();
     }
 
-    // 带动画的缩放（用于双击放大/复位）
     function animateZoomToPoint(targetScale, clientX, clientY) {
         if (!cloneImg) return;
         if (isZoomAnimating || isResetting || isAnimating) return;
         targetScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, targetScale));
         if (targetScale === scale) return;
 
-        // 计算目标 scale 和 translate，使缩放中心保持在 (clientX, clientY)
         const rect = cloneImg.getBoundingClientRect();
         const ratioX = (clientX - rect.left) / rect.width;
         const ratioY = (clientY - rect.top) / rect.height;
@@ -98,7 +94,6 @@
         const oldHeight = rect.height;
 
         const newScale = targetScale;
-        // 临时应用新 scale 计算新尺寸（不实际渲染，仅计算）
         const tempTransform = `translate(${translate.x}px, ${translate.y}px) scale(${newScale})`;
         const tempDiv = document.createElement('div');
         tempDiv.style.position = 'absolute';
@@ -116,18 +111,16 @@
         let newTranslateX = translate.x - deltaX;
         let newTranslateY = translate.y - deltaY;
 
-        // 临时保存目标值并应用边界限制（需要临时应用 scale 和 translate 来 clamp）
         const oldScale = scale;
         const oldTranslate = { ...translate };
         scale = newScale;
         translate = { x: newTranslateX, y: newTranslateY };
-        clampTranslate();        // 修正超出边界的偏移
+        clampTranslate();
         newTranslateX = translate.x;
         newTranslateY = translate.y;
         scale = oldScale;
         translate = oldTranslate;
 
-        // 开始动画
         isZoomAnimating = true;
         cloneImg.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.9, 0.4, 1)';
 
@@ -152,7 +145,6 @@
         }, 350);
     }
 
-    // 重置图片变换
     function resetTransform() {
         if (!cloneImg) return;
         if (isResetting || isZoomAnimating) return;
@@ -163,7 +155,6 @@
 
         isResetting = true;
         cloneImg.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.9, 0.4, 1)';
-        
         scale = 1;
         translate = { x: 0, y: 0 };
         applyTransform();
@@ -175,7 +166,6 @@
             clampTranslate();
         };
         cloneImg.addEventListener('transitionend', onResetEnd, { once: true });
-        
         setTimeout(() => {
             if (isResetting) {
                 cloneImg.removeEventListener('transitionend', onResetEnd);
@@ -204,7 +194,7 @@
         applyTransform();
     }
 
-    // 滚轮缩放
+    // ---------- 事件处理 ----------
     function onWheel(e) {
         if (!activeLightbox || isAnimating || isResetting || isZoomAnimating) return;
         e.preventDefault();
@@ -215,7 +205,6 @@
         zoomAtPoint(newScale, e.clientX, e.clientY);
     }
 
-    // 拖拽
     function onPointerDown(e) {
         if (!activeLightbox || isAnimating || scale === 1 || isResetting || isZoomAnimating) return;
         e.preventDefault();
@@ -241,23 +230,21 @@
         if (cloneImg) cloneImg.style.cursor = scale === 1 ? 'pointer' : 'grab';
     }
 
-    // 双指缩放
     function onTouchStart(e) {
-    if (isResetting || isZoomAnimating) return;
-    if (e.touches.length === 2) {
-        // 双指操作：清除双击计时，避免误触放大
-        if (tapTimer) clearTimeout(tapTimer);
-        lastTap = 0;
-        e.preventDefault();
-        const touch1 = e.touches[0];
-        const touch2 = e.touches[1];
-        initialDistance = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
-        initialScale = scale;
-        lastTouchCount = 2;
-    } else if (e.touches.length === 1) {
-        onPointerDown(e);
+        if (isResetting || isZoomAnimating) return;
+        if (e.touches.length === 2) {
+            if (tapTimer) clearTimeout(tapTimer);
+            lastTap = 0;
+            e.preventDefault();
+            const touch1 = e.touches[0];
+            const touch2 = e.touches[1];
+            initialDistance = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
+            initialScale = scale;
+            lastTouchCount = 2;
+        } else if (e.touches.length === 1) {
+            onPointerDown(e);
+        }
     }
-}
 
     function onTouchMove(e) {
         if (e.touches.length === 2 && initialDistance > 0) {
@@ -287,43 +274,39 @@
         }
     }
 
-// 移动端双击检测：仅在单指触摸时生效
-function onTouchStartForDoubleTap(e) {
-    // 单指才进行双击检测
-    if (e.touches.length !== 1) return;
-    if (isResetting || isZoomAnimating) return;
+    function onTouchStartForDoubleTap(e) {
+        if (e.touches.length !== 1) return;
+        if (isResetting || isZoomAnimating) return;
 
-    const now = Date.now();
-    const timeSinceLast = now - lastTap;
-    if (timeSinceLast < 300 && timeSinceLast > 0) {
-        // 单指双击
-        e.preventDefault();
-        e.stopPropagation();
-        if (isDragging) {
-            isDragging = false;
-            if (cloneImg) cloneImg.style.cursor = 'pointer';
-        }
-        const touch = e.touches[0];
-        if (touch) {
-            if (scale === 1) {
-                const targetScale = Math.min(MAX_SCALE, 2);
-                animateZoomToPoint(targetScale, touch.clientX, touch.clientY);
+        const now = Date.now();
+        const timeSinceLast = now - lastTap;
+        if (timeSinceLast < 300 && timeSinceLast > 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (isDragging) {
+                isDragging = false;
+                if (cloneImg) cloneImg.style.cursor = 'pointer';
+            }
+            const touch = e.touches[0];
+            if (touch) {
+                if (scale === 1) {
+                    const targetScale = Math.min(MAX_SCALE, 2);
+                    animateZoomToPoint(targetScale, touch.clientX, touch.clientY);
+                } else {
+                    resetTransform();
+                }
             } else {
                 resetTransform();
             }
+            lastTap = 0;
+            if (tapTimer) clearTimeout(tapTimer);
         } else {
-            resetTransform();
+            lastTap = now;
+            if (tapTimer) clearTimeout(tapTimer);
+            tapTimer = setTimeout(() => { lastTap = 0; }, 300);
         }
-        lastTap = 0;
-        if (tapTimer) clearTimeout(tapTimer);
-    } else {
-        lastTap = now;
-        if (tapTimer) clearTimeout(tapTimer);
-        tapTimer = setTimeout(() => { lastTap = 0; }, 300);
     }
-}
 
-    // 桌面端双击
     function onDoubleClick(e) {
         e.preventDefault();
         e.stopPropagation();
@@ -340,20 +323,17 @@ function onTouchStartForDoubleTap(e) {
         }
     }
 
-    // 绑定事件
     function bindZoomEvents() {
         if (!cloneImg) return;
         cloneImg.addEventListener('wheel', onWheel, { passive: false });
         cloneImg.addEventListener('mousedown', onPointerDown);
         window.addEventListener('mousemove', onPointerMove);
         window.addEventListener('mouseup', onPointerUp);
-        
         cloneImg.addEventListener('touchstart', onTouchStartForDoubleTap, { passive: false });
         cloneImg.addEventListener('touchstart', onTouchStart, { passive: false });
         cloneImg.addEventListener('touchmove', onTouchMove, { passive: false });
         cloneImg.addEventListener('touchend', onTouchEnd);
         cloneImg.addEventListener('touchcancel', onTouchEnd);
-        
         cloneImg.addEventListener('dblclick', onDoubleClick);
         cloneImg.style.cursor = 'pointer';
     }
@@ -374,7 +354,7 @@ function onTouchStartForDoubleTap(e) {
         lastTap = 0;
     }
 
-    // ---------- 灯箱核心（打开/关闭） ----------
+    // ---------- 灯箱核心 ----------
     function destroyLightboxDom() {
         if (lightboxElement && lightboxElement.parentNode) {
             lightboxElement.parentNode.removeChild(lightboxElement);
@@ -391,7 +371,6 @@ function onTouchStartForDoubleTap(e) {
         activeLightbox = false;
         isAnimating = false;
         originalImgRef = null;
-        
         if (resizeHandler) window.removeEventListener('resize', resizeHandler);
         if (escHandler) window.removeEventListener('keydown', escHandler);
         resizeHandler = null;
@@ -433,21 +412,39 @@ function onTouchStartForDoubleTap(e) {
         }
 
         isAnimating = true;
+
         const onCloseTransitionEnd = (e) => {
             if (e.target !== cloneImg) return;
-            cloneImg.removeEventListener('transitionend', onCloseTransitionEnd);
-            destroyLightboxDom();
-            resetLightboxState();
-            isAnimating = false;
+            if (e.propertyName === 'opacity') {
+                cloneImg.removeEventListener('transitionend', onCloseTransitionEnd);
+                destroyLightboxDom();
+                resetLightboxState();
+                isAnimating = false;
+            }
         };
         cloneImg.addEventListener('transitionend', onCloseTransitionEnd);
 
         cloneImg.style.transition = 'all 0.35s cubic-bezier(0.2, 0.9, 0.4, 1)';
-        cloneImg.style.transform = 'translate(0,0) scale(1)';
         cloneImg.style.top = startRect.top + 'px';
         cloneImg.style.left = startRect.left + 'px';
         cloneImg.style.width = startRect.width + 'px';
         cloneImg.style.height = startRect.height + 'px';
+        cloneImg.style.transform = 'translate(0,0) scale(1)';
+
+        setTimeout(() => {
+            if (!cloneImg) return;
+            cloneImg.style.transition = 'opacity 0.15s ease';
+            cloneImg.style.opacity = '0';
+        }, 250);
+
+        setTimeout(() => {
+            if (lightboxElement) {
+                cloneImg.removeEventListener('transitionend', onCloseTransitionEnd);
+                destroyLightboxDom();
+                resetLightboxState();
+                isAnimating = false;
+            }
+        }, 500);
 
         if (closeBtn) closeBtn.style.opacity = '0';
         if (lightboxElement) {
@@ -500,13 +497,13 @@ function onTouchStartForDoubleTap(e) {
 
         const btnClose = document.createElement('div');
         btnClose.className = 'lightbox-close-btn';
-        btnClose.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 24 24"><path fill="none" opacity="0.5" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" data-swindex="0" d="M12 12L7 7m5 5l5 5m-5-5l5-5m-5 5l-5 5"></path></svg>';
+        btnClose.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 24 24"><path fill="none" opacity="0.5" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 12L7 7m5 5l5 5m-5-5l5-5m-5 5l-5 5"></path></svg>';
         btnClose.style.cssText = `
             position: fixed;
             top: 24px;
             right: 28px;
-            width: 44px;
-            height: 44px;
+            width: 32px;
+            height: 32px;
             background: rgba(0, 0, 0, .5);
             backdrop-filter: blur(8px);
             border-radius: 50%;
@@ -524,32 +521,39 @@ function onTouchStartForDoubleTap(e) {
             -webkit-tap-highlight-color: transparent;
         `;
 
-        const cloneImage = document.createElement('img');
-        cloneImage.className = 'lightbox-clone-img';
-        cloneImage.src = imgElement.src;
-        cloneImage.alt = imgElement.alt || '';
-        cloneImage.style.cssText = `
+        // 创建克隆图片元素（普通图片）
+        const cloneElement = document.createElement('img');
+        cloneElement.className = 'lightbox-clone-img';
+        cloneElement.src = imgElement.src;
+        cloneElement.alt = imgElement.alt || '';
+        cloneElement.style.cssText = `
             position: fixed;
             top: ${startRect.top}px;
             left: ${startRect.left}px;
             width: ${startRect.width}px;
             height: ${startRect.height}px;
-            object-fit: contain;
-            will-change: transform, width, height, top, left;
+            object-fit: cover;
+            will-change: transform, width, height, top, left, opacity;
             transition: all 0.42s cubic-bezier(0.2, 0.9, 0.4, 1);
             z-index: 10001;
             border-radius: 12px;
             box-shadow: 0 25px 40px rgba(0,0,0,0.3);
             cursor: pointer;
             background-color: rgba(0,0,0,0.05);
+            opacity: 0;
         `;
 
-        overlay.appendChild(cloneImage);
+        cloneElement.style.top = startRect.top + 'px';
+        cloneElement.style.left = startRect.left + 'px';
+        cloneElement.style.width = startRect.width + 'px';
+        cloneElement.style.height = startRect.height + 'px';
+
+        overlay.appendChild(cloneElement);
         document.body.appendChild(overlay);
         document.body.appendChild(btnClose);
 
         lightboxElement = overlay;
-        cloneImg = cloneImage;
+        cloneImg = cloneElement;
         closeBtn = btnClose;
 
         cloneImg.getBoundingClientRect();
@@ -558,6 +562,7 @@ function onTouchStartForDoubleTap(e) {
             cloneImg.style.left = finalLeft + 'px';
             cloneImg.style.width = finalWidth + 'px';
             cloneImg.style.height = finalHeight + 'px';
+            cloneImg.style.opacity = '1';
             cloneImg.style.borderRadius = '10px';
             overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.85)';
             overlay.style.backdropFilter = 'blur(12px)';
@@ -584,36 +589,32 @@ function onTouchStartForDoubleTap(e) {
         activeLightbox = true;
         isAnimating = true;
 
-        const handleOverlayClick = (e) => {
+        overlay.addEventListener('click', (e) => {
             if (!activeLightbox || isAnimating) return;
             if (e.target === overlay) {
                 e.stopPropagation();
                 closeLightbox(false);
             }
-        };
-        overlay.addEventListener('click', handleOverlayClick);
+        });
 
-        const handleCloseClick = (e) => {
+        btnClose.addEventListener('click', (e) => {
             e.stopPropagation();
             if (!activeLightbox || isAnimating) return;
             closeLightbox(false);
-        };
-        btnClose.addEventListener('click', handleCloseClick);
+        });
 
-        const handleKeydown = (e) => {
+        escHandler = (e) => {
             if (e.key === 'Escape' && activeLightbox && !isAnimating) {
                 e.preventDefault();
                 closeLightbox(false);
             }
         };
-        window.addEventListener('keydown', handleKeydown);
-        escHandler = handleKeydown;
+        window.addEventListener('keydown', escHandler);
 
-        const handleResize = () => {
+        resizeHandler = () => {
             if (activeLightbox && !isAnimating) closeLightbox(true);
         };
-        window.addEventListener('resize', handleResize);
-        resizeHandler = handleResize;
+        window.addEventListener('resize', resizeHandler);
     }
 
     function initLightbox(selector = '.lightbox-img') {
@@ -630,9 +631,11 @@ function onTouchStartForDoubleTap(e) {
         };
     }
 
+    // 暴露全局 API
     global.Lightbox = {
         init: initLightbox,
         open: openLightbox,
         close: closeLightbox,
     };
+
 })(window);
