@@ -1,641 +1,459 @@
 (function (global) {
     'use strict';
 
-    // ---------- 全局状态 ----------
-    let activeLightbox = false;
-    let isAnimating = false;
-    let lightboxElement = null;
-    let cloneImg = null;
-    let closeBtn = null;
-    let originalImgRef = null;
-    let resizeHandler = null;
-    let escHandler = null;
+    const STYLE_ID = 'lightbox-style';
+    const STYLE_CSS = `
+.lightbox-overlay.lightbox-overlay{position:fixed!important;inset:0!important;margin:0!important;padding:0!important;z-index:10000!important;-webkit-tap-highlight-color:transparent!important;touch-action:none!important;user-select:none!important;-webkit-user-select:none!important;overflow:hidden!important;box-sizing:border-box!important;background:transparent!important;border:0!important;outline:0!important}
+.lightbox-overlay.lightbox-overlay *,.lightbox-overlay.lightbox-overlay *::before,.lightbox-overlay.lightbox-overlay *::after{box-sizing:border-box!important}
+.lightbox-overlay.lightbox-overlay .lightbox-blur{position:absolute!important;inset:0!important;-webkit-backdrop-filter:blur(12px)!important;backdrop-filter:blur(12px)!important;opacity:0;transition:opacity .35s ease;pointer-events:none!important;will-change:opacity;z-index:1}
+.lightbox-overlay.lightbox-overlay .lightbox-dim{position:absolute!important;inset:0!important;background:rgba(0,0,0,.78)!important;opacity:0;transition:opacity .35s ease;pointer-events:none!important;will-change:opacity;z-index:2}
+.lightbox-overlay.lightbox-overlay.is-open .lightbox-blur,.lightbox-overlay.lightbox-overlay.is-open .lightbox-dim{opacity:1}
+.lightbox-overlay.lightbox-overlay .lightbox-clone{position:fixed!important;margin:0!important;padding:0!important;z-index:10001!important;opacity:1;overflow:hidden!important;background:#1a1a1c!important;border:0!important;outline:0!important;border-radius:12px;object-fit:cover!important;display:block!important;cursor:pointer;user-select:none!important;-webkit-user-select:none!important;transform-origin:center center;will-change:transform}
+.lightbox-overlay.lightbox-overlay .lightbox-clone.zoomed{cursor:grab!important}
+.lightbox-overlay.lightbox-overlay .lightbox-clone.dragging{cursor:grabbing!important}
+.lightbox-overlay.lightbox-overlay .lightbox-close-btn{position:fixed!important;top:20px!important;right:20px!important;z-index:10002!important;width:40px!important;height:40px!important;border-radius:50%!important;background:rgba(0,0,0,.5)!important;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.1)!important;color:#fff!important;display:flex!important;align-items:center!important;justify-content:center!important;cursor:pointer;opacity:0;transition:opacity .25s ease,transform .2s ease;padding:0!important;margin:0!important;-webkit-tap-highlight-color:transparent!important;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.lightbox-overlay.lightbox-overlay.is-open .lightbox-close-btn{opacity:1}
+.lightbox-overlay.lightbox-overlay .lightbox-close-btn:hover{transform:scale(1.08)}
+.lightbox-overlay.lightbox-overlay .lightbox-close-btn:active{transform:scale(.96)}
+.lightbox-overlay.lightbox-overlay .lightbox-close-btn svg{width:18px!important;height:18px!important;display:block!important;fill:none!important;stroke:currentColor!important;stroke-width:2!important;stroke-linecap:round!important;stroke-linejoin:round!important}
+`;
 
-    // ---------- 缩放/拖拽状态 ----------
-    let isDragging = false;
-    let dragStart = { x: 0, y: 0 };
-    let translate = { x: 0, y: 0 };
-    let scale = 1;
-    let initialDistance = 0;
-    let initialScale = 1;
-    let lastTouchCount = 0;
-    let isResetting = false;
-    let isZoomAnimating = false;
+    const DURATION = 400;
+    const EASING = 'cubic-bezier(0.2, 0.9, 0.4, 1)';
+    const GEOM_TRANSITION =
+        `left ${DURATION}ms ${EASING}, ` +
+        `top ${DURATION}ms ${EASING}, ` +
+        `width ${DURATION}ms ${EASING}, ` +
+        `height ${DURATION}ms ${EASING}, ` +
+        `border-radius ${DURATION}ms ${EASING}`;
+    const GEOM_TIMEOUT = DURATION + 120;
+    const CLONE_RADIUS_START = '12px';
+    const CLONE_RADIUS_END = '10px';
+    const MIN_SCALE = 1, MAX_SCALE = 5;
+    const ZOOM_TRANSITION = 'transform 0.3s cubic-bezier(0.2, 0.9, 0.4, 1)';
 
-    let lastTap = 0;
-    let tapTimer = null;
+    let lbState = null;
 
-    const MIN_SCALE = 1;
-    const MAX_SCALE = 5;
+    function injectStyles() {
+        if (document.getElementById(STYLE_ID)) return;
+        const head = document.head || document.documentElement;
+        if (!head) return;
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.type = 'text/css';
+        style.textContent = STYLE_CSS;
+        head.appendChild(style);
+    }
+    if (document.head) injectStyles();
+    else if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', injectStyles, { once: true });
+    } else injectStyles();
 
-    // ---------- 工具函数 ----------
     function getRect(el) {
-        if (!el) return { top: 0, left: 0, width: 0, height: 0 };
-        const rect = el.getBoundingClientRect();
-        return { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
+        const r = el.getBoundingClientRect();
+        return { left: r.left, top: r.top, width: r.width, height: r.height };
     }
-
-    function getFinalSize(naturalWidth, naturalHeight, viewportW, viewportH) {
-        const maxWidth = viewportW * 0.85;
-        const maxHeight = viewportH * 0.85;
-        let finalWidth = naturalWidth;
-        let finalHeight = naturalHeight;
-        if (finalWidth > maxWidth) {
-            const ratio = maxWidth / finalWidth;
-            finalWidth = maxWidth;
-            finalHeight *= ratio;
-        }
-        if (finalHeight > maxHeight) {
-            const ratio = maxHeight / finalHeight;
-            finalHeight = maxHeight;
-            finalWidth *= ratio;
-        }
-        return { width: finalWidth, height: finalHeight };
-    }
-
-    function getCenterPosition(finalWidth, finalHeight, viewportW, viewportH) {
-        return { left: (viewportW - finalWidth) / 2, top: (viewportH - finalHeight) / 2 };
-    }
-
-    // ---------- 缩放/拖拽核心 ----------
-    function zoomAtPoint(newScale, clientX, clientY) {
-        if (!cloneImg) return;
-        newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, newScale));
-        if (newScale === scale) return;
-
-        const rect = cloneImg.getBoundingClientRect();
-        const ratioX = (clientX - rect.left) / rect.width;
-        const ratioY = (clientY - rect.top) / rect.height;
-        const oldWidth = rect.width;
-        const oldHeight = rect.height;
-
-        scale = newScale;
-        applyTransform();
-
-        const newRect = cloneImg.getBoundingClientRect();
-        const deltaX = (newRect.width - oldWidth) * ratioX;
-        const deltaY = (newRect.height - oldHeight) * ratioY;
-        translate.x -= deltaX;
-        translate.y -= deltaY;
-        clampTranslate();
-        applyTransform();
-    }
-
-    function animateZoomToPoint(targetScale, clientX, clientY) {
-        if (!cloneImg) return;
-        if (isZoomAnimating || isResetting || isAnimating) return;
-        targetScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, targetScale));
-        if (targetScale === scale) return;
-
-        const rect = cloneImg.getBoundingClientRect();
-        const ratioX = (clientX - rect.left) / rect.width;
-        const ratioY = (clientY - rect.top) / rect.height;
-        const oldWidth = rect.width;
-        const oldHeight = rect.height;
-
-        const newScale = targetScale;
-        const tempTransform = `translate(${translate.x}px, ${translate.y}px) scale(${newScale})`;
-        const tempDiv = document.createElement('div');
-        tempDiv.style.position = 'absolute';
-        tempDiv.style.visibility = 'hidden';
-        tempDiv.style.transform = tempTransform;
-        tempDiv.style.transformOrigin = 'center center';
-        tempDiv.style.width = rect.width + 'px';
-        tempDiv.style.height = rect.height + 'px';
-        document.body.appendChild(tempDiv);
-        const newRect = tempDiv.getBoundingClientRect();
-        document.body.removeChild(tempDiv);
-
-        const deltaX = (newRect.width - oldWidth) * ratioX;
-        const deltaY = (newRect.height - oldHeight) * ratioY;
-        let newTranslateX = translate.x - deltaX;
-        let newTranslateY = translate.y - deltaY;
-
-        const oldScale = scale;
-        const oldTranslate = { ...translate };
-        scale = newScale;
-        translate = { x: newTranslateX, y: newTranslateY };
-        clampTranslate();
-        newTranslateX = translate.x;
-        newTranslateY = translate.y;
-        scale = oldScale;
-        translate = oldTranslate;
-
-        isZoomAnimating = true;
-        cloneImg.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.9, 0.4, 1)';
-
-        scale = newScale;
-        translate = { x: newTranslateX, y: newTranslateY };
-        applyTransform();
-
-        const onZoomEnd = () => {
-            cloneImg.removeEventListener('transitionend', onZoomEnd);
-            cloneImg.style.transition = '';
-            isZoomAnimating = false;
-            clampTranslate();
-        };
-        cloneImg.addEventListener('transitionend', onZoomEnd, { once: true });
-        setTimeout(() => {
-            if (isZoomAnimating) {
-                cloneImg.removeEventListener('transitionend', onZoomEnd);
-                cloneImg.style.transition = '';
-                isZoomAnimating = false;
-                clampTranslate();
-            }
-        }, 350);
-    }
-
-    function resetTransform() {
-        if (!cloneImg) return;
-        if (isResetting || isZoomAnimating) return;
-        if (isDragging) {
-            isDragging = false;
-            if (cloneImg) cloneImg.style.cursor = 'pointer';
-        }
-
-        isResetting = true;
-        cloneImg.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.9, 0.4, 1)';
-        scale = 1;
-        translate = { x: 0, y: 0 };
-        applyTransform();
-
-        const onResetEnd = () => {
-            cloneImg.removeEventListener('transitionend', onResetEnd);
-            cloneImg.style.transition = '';
-            isResetting = false;
-            clampTranslate();
-        };
-        cloneImg.addEventListener('transitionend', onResetEnd, { once: true });
-        setTimeout(() => {
-            if (isResetting) {
-                cloneImg.removeEventListener('transitionend', onResetEnd);
-                cloneImg.style.transition = '';
-                isResetting = false;
-                clampTranslate();
-            }
-        }, 350);
+    function getFinalSize(nw, nh, vw, vh) {
+        const mw = vw * 0.85, mh = vh * 0.85;
+        let w = nw, h = nh;
+        if (w > mw) { const r = mw / w; w = mw; h *= r; }
+        if (h > mh) { const r = mh / h; h = mh; w *= r; }
+        return { width: w, height: h };
     }
 
     function applyTransform() {
-        if (!cloneImg) return;
-        cloneImg.style.transform = `translate(${translate.x}px, ${translate.y}px) scale(${scale})`;
-        cloneImg.style.transformOrigin = 'center center';
+        if (!lbState || !lbState.cloneEl) return;
+        lbState.cloneEl.style.transform =
+            `translate3d(${lbState.translate.x}px,${lbState.translate.y}px,0) scale(${lbState.scale})`;
     }
-
     function clampTranslate() {
-        if (!cloneImg) return;
-        const rect = cloneImg.getBoundingClientRect();
-        const viewportW = window.innerWidth;
-        const viewportH = window.innerHeight;
-        const maxX = Math.max(0, (rect.width - viewportW) / 2);
-        const maxY = Math.max(0, (rect.height - viewportH) / 2);
-        translate.x = Math.min(maxX, Math.max(-maxX, translate.x));
-        translate.y = Math.min(maxY, Math.max(-maxY, translate.y));
+        if (!lbState || !lbState.baseRect) return;
+        const vw = window.innerWidth, vh = window.innerHeight;
+        const { width, height } = lbState.baseRect;
+        const s = lbState.scale;
+        const mx = Math.max(0, (width * s - vw) / 2);
+        const my = Math.max(0, (height * s - vh) / 2);
+        lbState.translate.x = Math.min(mx, Math.max(-mx, lbState.translate.x));
+        lbState.translate.y = Math.min(my, Math.max(-my, lbState.translate.y));
+    }
+    function zoomAtPoint(ns, cx, cy) {
+        if (!lbState) return;
+        ns = Math.min(MAX_SCALE, Math.max(MIN_SCALE, ns));
+        if (ns === lbState.scale) return;
+        const k = ns / lbState.scale;
+        const br = lbState.baseRect;
+        const ox = br.left + br.width / 2, oy = br.top + br.height / 2;
+        lbState.translate.x = (cx - ox) * (1 - k) + k * lbState.translate.x;
+        lbState.translate.y = (cy - oy) * (1 - k) + k * lbState.translate.y;
+        lbState.scale = ns;
+        clampTranslate();
         applyTransform();
+        lbState.cloneEl.classList.toggle('zoomed', ns > 1);
+    }
+    function animateZoomToPoint(ts, cx, cy) {
+        if (!lbState || lbState.isZoomAnimating || lbState.isResetting) return;
+        ts = Math.min(MAX_SCALE, Math.max(MIN_SCALE, ts));
+        if (ts === lbState.scale) return;
+        const k = ts / lbState.scale;
+        const br = lbState.baseRect;
+        const ox = br.left + br.width / 2, oy = br.top + br.height / 2;
+        const tx = (cx - ox) * (1 - k) + k * lbState.translate.x;
+        const ty = (cy - oy) * (1 - k) + k * lbState.translate.y;
+        lbState.isZoomAnimating = true;
+        const clone = lbState.cloneEl;
+        clone.style.transition = ZOOM_TRANSITION;
+        lbState.scale = ts;
+        lbState.translate.x = tx;
+        lbState.translate.y = ty;
+        clampTranslate();
+        applyTransform();
+        const done = () => {
+            clone.removeEventListener('transitionend', done);
+            clone.style.transition = '';
+            if (!lbState) return;
+            lbState.isZoomAnimating = false;
+            clone.classList.toggle('zoomed', lbState.scale > 1);
+        };
+        clone.addEventListener('transitionend', done);
+        setTimeout(() => { if (lbState && lbState.isZoomAnimating) done(); }, 350);
+    }
+    function resetTransform() {
+        if (!lbState || lbState.isResetting || lbState.isZoomAnimating) return;
+        if (lbState.isDragging) {
+            lbState.isDragging = false;
+            lbState.cloneEl.classList.remove('dragging');
+        }
+        if (lbState.scale === 1 && lbState.translate.x === 0 && lbState.translate.y === 0) return;
+        lbState.isResetting = true;
+        const clone = lbState.cloneEl;
+        clone.style.transition = ZOOM_TRANSITION;
+        lbState.scale = 1;
+        lbState.translate.x = 0;
+        lbState.translate.y = 0;
+        applyTransform();
+        const done = () => {
+            clone.removeEventListener('transitionend', done);
+            clone.style.transition = '';
+            if (!lbState) return;
+            lbState.isResetting = false;
+            clone.classList.remove('zoomed');
+        };
+        clone.addEventListener('transitionend', done);
+        setTimeout(() => { if (lbState && lbState.isResetting) done(); }, 350);
     }
 
-    // ---------- 事件处理 ----------
     function onWheel(e) {
-        if (!activeLightbox || isAnimating || isResetting || isZoomAnimating) return;
+        if (!lbState || lbState.isAnimating || lbState.isResetting || lbState.isZoomAnimating) return;
         e.preventDefault();
-        const delta = e.deltaY > 0 ? 0.9 : 1.1;
-        let newScale = scale * delta;
-        newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, newScale));
-        if (newScale === scale) return;
-        zoomAtPoint(newScale, e.clientX, e.clientY);
+        zoomAtPoint(lbState.scale * (e.deltaY > 0 ? 0.9 : 1.1), e.clientX, e.clientY);
     }
-
     function onPointerDown(e) {
-        if (!activeLightbox || isAnimating || scale === 1 || isResetting || isZoomAnimating) return;
+        if (!lbState || lbState.scale === 1) return;
+        if (lbState.isAnimating || lbState.isResetting || lbState.isZoomAnimating) return;
         e.preventDefault();
-        isDragging = true;
-        const point = e.touches ? e.touches[0] : e;
-        dragStart.x = point.clientX - translate.x;
-        dragStart.y = point.clientY - translate.y;
-        cloneImg.style.cursor = 'grabbing';
+        lbState.isDragging = true;
+        const p = e.touches ? e.touches[0] : e;
+        lbState.dragStart.x = p.clientX - lbState.translate.x;
+        lbState.dragStart.y = p.clientY - lbState.translate.y;
+        lbState.cloneEl.classList.add('dragging');
     }
-
     function onPointerMove(e) {
-        if (!isDragging) return;
+        if (!lbState || !lbState.isDragging) return;
         e.preventDefault();
-        const point = e.touches ? e.touches[0] : e;
-        translate.x = point.clientX - dragStart.x;
-        translate.y = point.clientY - dragStart.y;
+        const p = e.touches ? e.touches[0] : e;
+        lbState.translate.x = p.clientX - lbState.dragStart.x;
+        lbState.translate.y = p.clientY - lbState.dragStart.y;
         clampTranslate();
         applyTransform();
     }
-
     function onPointerUp() {
-        isDragging = false;
-        if (cloneImg) cloneImg.style.cursor = scale === 1 ? 'pointer' : 'grab';
+        if (!lbState) return;
+        lbState.isDragging = false;
+        lbState.cloneEl.classList.remove('dragging');
     }
-
     function onTouchStart(e) {
-        if (isResetting || isZoomAnimating) return;
+        if (!lbState || lbState.isResetting || lbState.isZoomAnimating) return;
         if (e.touches.length === 2) {
-            if (tapTimer) clearTimeout(tapTimer);
-            lastTap = 0;
+            if (lbState.tapTimer) { clearTimeout(lbState.tapTimer); lbState.tapTimer = null; }
+            lbState.lastTap = 0;
             e.preventDefault();
-            const touch1 = e.touches[0];
-            const touch2 = e.touches[1];
-            initialDistance = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
-            initialScale = scale;
-            lastTouchCount = 2;
-        } else if (e.touches.length === 1) {
-            onPointerDown(e);
-        }
+            const t1 = e.touches[0], t2 = e.touches[1];
+            lbState.initialDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+            lbState.initialScale = lbState.scale;
+        } else if (e.touches.length === 1) onPointerDown(e);
     }
-
     function onTouchMove(e) {
-        if (e.touches.length === 2 && initialDistance > 0) {
+        if (!lbState) return;
+        if (e.touches.length === 2 && lbState.initialDistance > 0) {
             e.preventDefault();
-            const touch1 = e.touches[0];
-            const touch2 = e.touches[1];
-            const distance = Math.hypot(touch1.clientX - touch2.clientX, touch1.clientY - touch2.clientY);
-            let newScale = initialScale * (distance / initialDistance);
-            newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, newScale));
-            if (newScale !== scale) {
-                const centerX = (touch1.clientX + touch2.clientX) / 2;
-                const centerY = (touch1.clientY + touch2.clientY) / 2;
-                zoomAtPoint(newScale, centerX, centerY);
+            const t1 = e.touches[0], t2 = e.touches[1];
+            const d = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+            let ns = lbState.initialScale * (d / lbState.initialDistance);
+            ns = Math.min(MAX_SCALE, Math.max(MIN_SCALE, ns));
+            if (ns !== lbState.scale) {
+                zoomAtPoint(ns, (t1.clientX + t2.clientX) / 2, (t1.clientY + t2.clientY) / 2);
             }
-        } else if (e.touches.length === 1) {
-            onPointerMove(e);
-        }
+        } else if (e.touches.length === 1) onPointerMove(e);
     }
-
     function onTouchEnd(e) {
-        if (e.touches.length < 2) {
-            initialDistance = 0;
-            lastTouchCount = 0;
-        }
-        if (e.touches.length === 0) {
-            onPointerUp();
-        }
+        if (!lbState) return;
+        if (e.touches.length < 2) lbState.initialDistance = 0;
+        if (e.touches.length === 0) onPointerUp();
     }
-
     function onTouchStartForDoubleTap(e) {
+        if (!lbState) return;
         if (e.touches.length !== 1) return;
-        if (isResetting || isZoomAnimating) return;
-
+        if (lbState.isResetting || lbState.isZoomAnimating) return;
         const now = Date.now();
-        const timeSinceLast = now - lastTap;
-        if (timeSinceLast < 300 && timeSinceLast > 0) {
+        const dt = now - lbState.lastTap;
+        if (dt < 300 && dt > 0) {
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
             e.preventDefault();
-            e.stopPropagation();
-            if (isDragging) {
-                isDragging = false;
-                if (cloneImg) cloneImg.style.cursor = 'pointer';
+            if (lbState.isDragging) {
+                lbState.isDragging = false;
+                lbState.cloneEl.classList.remove('dragging');
             }
-            const touch = e.touches[0];
-            if (touch) {
-                if (scale === 1) {
-                    const targetScale = Math.min(MAX_SCALE, 2);
-                    animateZoomToPoint(targetScale, touch.clientX, touch.clientY);
-                } else {
-                    resetTransform();
-                }
-            } else {
-                resetTransform();
+            const t = e.touches[0];
+            if (t) {
+                if (lbState.scale === 1) animateZoomToPoint(Math.min(MAX_SCALE, 2), t.clientX, t.clientY);
+                else resetTransform();
             }
-            lastTap = 0;
-            if (tapTimer) clearTimeout(tapTimer);
+            lbState.lastTap = 0;
+            if (lbState.tapTimer) { clearTimeout(lbState.tapTimer); lbState.tapTimer = null; }
         } else {
-            lastTap = now;
-            if (tapTimer) clearTimeout(tapTimer);
-            tapTimer = setTimeout(() => { lastTap = 0; }, 300);
+            lbState.lastTap = now;
+            if (lbState.tapTimer) clearTimeout(lbState.tapTimer);
+            lbState.tapTimer = setTimeout(() => { if (lbState) lbState.lastTap = 0; }, 300);
         }
     }
-
     function onDoubleClick(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (isResetting || isZoomAnimating) return;
-        if (isDragging) {
-            isDragging = false;
-            if (cloneImg) cloneImg.style.cursor = 'pointer';
-        }
-        if (scale === 1) {
-            const targetScale = Math.min(MAX_SCALE, 2.5);
-            animateZoomToPoint(targetScale, e.clientX, e.clientY);
-        } else {
-            resetTransform();
-        }
+        if (!lbState) return;
+        e.preventDefault(); e.stopPropagation();
+        if (lbState.isResetting || lbState.isZoomAnimating) return;
+        if (lbState.scale === 1) animateZoomToPoint(Math.min(MAX_SCALE, 2.5), e.clientX, e.clientY);
+        else resetTransform();
     }
 
     function bindZoomEvents() {
-        if (!cloneImg) return;
-        cloneImg.addEventListener('wheel', onWheel, { passive: false });
-        cloneImg.addEventListener('mousedown', onPointerDown);
+        if (!lbState || !lbState.cloneEl) return;
+        const c = lbState.cloneEl;
+        c.addEventListener('wheel', onWheel, { passive: false });
+        c.addEventListener('mousedown', onPointerDown);
         window.addEventListener('mousemove', onPointerMove);
         window.addEventListener('mouseup', onPointerUp);
-        cloneImg.addEventListener('touchstart', onTouchStartForDoubleTap, { passive: false });
-        cloneImg.addEventListener('touchstart', onTouchStart, { passive: false });
-        cloneImg.addEventListener('touchmove', onTouchMove, { passive: false });
-        cloneImg.addEventListener('touchend', onTouchEnd);
-        cloneImg.addEventListener('touchcancel', onTouchEnd);
-        cloneImg.addEventListener('dblclick', onDoubleClick);
-        cloneImg.style.cursor = 'pointer';
+        c.addEventListener('touchstart', onTouchStartForDoubleTap, { passive: false });
+        c.addEventListener('touchstart', onTouchStart, { passive: false });
+        c.addEventListener('touchmove', onTouchMove, { passive: false });
+        c.addEventListener('touchend', onTouchEnd);
+        c.addEventListener('touchcancel', onTouchEnd);
+        c.addEventListener('dblclick', onDoubleClick);
     }
-
     function unbindZoomEvents() {
-        if (!cloneImg) return;
-        cloneImg.removeEventListener('wheel', onWheel);
-        cloneImg.removeEventListener('mousedown', onPointerDown);
+        if (!lbState || !lbState.cloneEl) return;
+        const c = lbState.cloneEl;
+        c.removeEventListener('wheel', onWheel);
+        c.removeEventListener('mousedown', onPointerDown);
         window.removeEventListener('mousemove', onPointerMove);
         window.removeEventListener('mouseup', onPointerUp);
-        cloneImg.removeEventListener('touchstart', onTouchStartForDoubleTap);
-        cloneImg.removeEventListener('touchstart', onTouchStart);
-        cloneImg.removeEventListener('touchmove', onTouchMove);
-        cloneImg.removeEventListener('touchend', onTouchEnd);
-        cloneImg.removeEventListener('touchcancel', onTouchEnd);
-        cloneImg.removeEventListener('dblclick', onDoubleClick);
-        if (tapTimer) clearTimeout(tapTimer);
-        lastTap = 0;
+        c.removeEventListener('touchstart', onTouchStartForDoubleTap);
+        c.removeEventListener('touchstart', onTouchStart);
+        c.removeEventListener('touchmove', onTouchMove);
+        c.removeEventListener('touchend', onTouchEnd);
+        c.removeEventListener('touchcancel', onTouchEnd);
+        c.removeEventListener('dblclick', onDoubleClick);
+        if (lbState.tapTimer) { clearTimeout(lbState.tapTimer); lbState.tapTimer = null; }
+        lbState.lastTap = 0;
     }
 
-    // ---------- 灯箱核心 ----------
-    function destroyLightboxDom() {
-        if (lightboxElement && lightboxElement.parentNode) {
-            lightboxElement.parentNode.removeChild(lightboxElement);
-        }
-        if (closeBtn && closeBtn.parentNode) {
-            closeBtn.parentNode.removeChild(closeBtn);
-        }
-        lightboxElement = null;
-        cloneImg = null;
-        closeBtn = null;
-    }
-
-    function resetLightboxState() {
-        activeLightbox = false;
-        isAnimating = false;
-        originalImgRef = null;
-        if (resizeHandler) window.removeEventListener('resize', resizeHandler);
-        if (escHandler) window.removeEventListener('keydown', escHandler);
-        resizeHandler = null;
-        escHandler = null;
-        scale = 1;
-        translate = { x: 0, y: 0 };
-        isDragging = false;
-        isResetting = false;
-        isZoomAnimating = false;
-        if (tapTimer) clearTimeout(tapTimer);
-        lastTap = 0;
-    }
-
-    function closeLightbox(skipAnimation = false) {
-        if (!activeLightbox && !lightboxElement) return;
-        if (isAnimating && !skipAnimation) return;
-
-        if (resizeHandler) window.removeEventListener('resize', resizeHandler);
-        if (escHandler) window.removeEventListener('keydown', escHandler);
+    function destroyOverlay() {
+        if (!lbState) return;
+        if (lbState.resizeHandler) window.removeEventListener('resize', lbState.resizeHandler);
+        if (lbState.escHandler) window.removeEventListener('keydown', lbState.escHandler);
         unbindZoomEvents();
-
-        if (!lightboxElement || !cloneImg || !originalImgRef) {
-            destroyLightboxDom();
-            resetLightboxState();
-            return;
+        document.body.style.overflow = lbState._bodyOverflow || '';
+        document.body.style.paddingRight = lbState._bodyPaddingRight || '';
+        if (lbState.overlayEl && lbState.overlayEl.parentNode) {
+            lbState.overlayEl.parentNode.removeChild(lbState.overlayEl);
         }
-
-        if (skipAnimation) {
-            destroyLightboxDom();
-            resetLightboxState();
-            return;
-        }
-
-        const startRect = getRect(originalImgRef);
-        if (startRect.width === 0 || startRect.height === 0) {
-            destroyLightboxDom();
-            resetLightboxState();
-            return;
-        }
-
-        isAnimating = true;
-
-        const onCloseTransitionEnd = (e) => {
-            if (e.target !== cloneImg) return;
-            if (e.propertyName === 'opacity') {
-                cloneImg.removeEventListener('transitionend', onCloseTransitionEnd);
-                destroyLightboxDom();
-                resetLightboxState();
-                isAnimating = false;
-            }
-        };
-        cloneImg.addEventListener('transitionend', onCloseTransitionEnd);
-
-        cloneImg.style.transition = 'all 0.35s cubic-bezier(0.2, 0.9, 0.4, 1)';
-        cloneImg.style.top = startRect.top + 'px';
-        cloneImg.style.left = startRect.left + 'px';
-        cloneImg.style.width = startRect.width + 'px';
-        cloneImg.style.height = startRect.height + 'px';
-        cloneImg.style.transform = 'translate(0,0) scale(1)';
-
-        setTimeout(() => {
-            if (!cloneImg) return;
-            cloneImg.style.transition = 'opacity 0.15s ease';
-            cloneImg.style.opacity = '0';
-        }, 250);
-
-        setTimeout(() => {
-            if (lightboxElement) {
-                cloneImg.removeEventListener('transitionend', onCloseTransitionEnd);
-                destroyLightboxDom();
-                resetLightboxState();
-                isAnimating = false;
-            }
-        }, 500);
-
-        if (closeBtn) closeBtn.style.opacity = '0';
-        if (lightboxElement) {
-            lightboxElement.style.backgroundColor = 'rgba(0, 0, 0, 0)';
-            lightboxElement.style.backdropFilter = 'blur(0px)';
-        }
+        lbState = null;
     }
 
     function openLightbox(imgElement) {
-        if (activeLightbox || isAnimating) return;
+        if (lbState) return;
         if (!imgElement || !imgElement.src) return;
 
-        const naturalWidth = imgElement.naturalWidth;
-        const naturalHeight = imgElement.naturalHeight;
-        if (naturalWidth === 0 || naturalHeight === 0) {
-            imgElement.addEventListener('load', function onLoad() {
+        const natW = imgElement.naturalWidth, natH = imgElement.naturalHeight;
+        if (!natW || !natH) {
+            const onLoad = () => {
                 imgElement.removeEventListener('load', onLoad);
                 openLightbox(imgElement);
-            });
+            };
+            imgElement.addEventListener('load', onLoad);
             return;
         }
 
-        originalImgRef = imgElement;
         const startRect = getRect(imgElement);
-        if (startRect.width === 0) return;
+        if (!startRect.width || !startRect.height) return;
 
-        const viewportW = window.innerWidth;
-        const viewportH = window.innerHeight;
-        const { width: finalWidth, height: finalHeight } = getFinalSize(naturalWidth, naturalHeight, viewportW, viewportH);
-        const { left: finalLeft, top: finalTop } = getCenterPosition(finalWidth, finalHeight, viewportW, viewportH);
+        const vw = window.innerWidth, vh = window.innerHeight;
+        const { width: finalW, height: finalH } = getFinalSize(natW, natH, vw, vh);
+        const finalLeft = (vw - finalW) / 2;
+        const finalTop = (vh - finalH) / 2;
 
         const overlay = document.createElement('div');
         overlay.className = 'lightbox-overlay';
-        overlay.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0);
-            backdrop-filter: blur(0px);
-            z-index: 10000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            -webkit-tap-highlight-color: transparent;
-            transition: background-color 0.35s ease, backdrop-filter 0.3s ease;
-            cursor: pointer;
-        `;
+        overlay.innerHTML =
+            '<div class="lightbox-blur"></div>' +
+            '<div class="lightbox-dim"></div>' +
+            '<img class="lightbox-clone lightbox-clone-img" draggable="false" alt="">' +
+            '<div class="lightbox-close-btn" role="button" aria-label="关闭">' +
+                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+                    '<path d="M6 6l12 12M18 6L6 18"/>' +
+                '</svg>' +
+            '</div>';
 
-        const btnClose = document.createElement('div');
-        btnClose.className = 'lightbox-close-btn';
-        btnClose.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 24 24"><path fill="none" opacity="0.5" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 12L7 7m5 5l5 5m-5-5l5-5m-5 5l-5 5"></path></svg>';
-        btnClose.style.cssText = `
-            position: fixed;
-            top: 24px;
-            right: 28px;
-            width: 32px;
-            height: 32px;
-            background: rgba(0, 0, 0, .5);
-            backdrop-filter: blur(8px);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #ffffffa8;
-            cursor: pointer;
-            z-index: 10002;
-            padding: 5px;
-            transition: opacity 0.2s, transform 0.2s;
-            opacity: 1;
-            box-shadow: rgba(0, 0, 0, 0.2) 0px 4px 12px;
-            border: 1px solid rgba(200, 200, 200, 0.05);
-            -webkit-tap-highlight-color: transparent;
-        `;
+        const clone = overlay.querySelector('.lightbox-clone');
+        clone.src = imgElement.src;
+        clone.alt = imgElement.alt || '';
+        clone.style.left = startRect.left + 'px';
+        clone.style.top = startRect.top + 'px';
+        clone.style.width = startRect.width + 'px';
+        clone.style.height = startRect.height + 'px';
+        clone.style.borderRadius = CLONE_RADIUS_START;
 
-        // 创建克隆图片元素（普通图片）
-        const cloneElement = document.createElement('img');
-        cloneElement.className = 'lightbox-clone-img';
-        cloneElement.src = imgElement.src;
-        cloneElement.alt = imgElement.alt || '';
-        cloneElement.style.cssText = `
-            position: fixed;
-            top: ${startRect.top}px;
-            left: ${startRect.left}px;
-            width: ${startRect.width}px;
-            height: ${startRect.height}px;
-            object-fit: cover;
-            will-change: transform, width, height, top, left, opacity;
-            transition: all 0.42s cubic-bezier(0.2, 0.9, 0.4, 1);
-            z-index: 10001;
-            border-radius: 12px;
-            box-shadow: 0 25px 40px rgba(0,0,0,0.3);
-            cursor: pointer;
-            background-color: rgba(0,0,0,0.05);
-            opacity: 0;
-        `;
-
-        cloneElement.style.top = startRect.top + 'px';
-        cloneElement.style.left = startRect.left + 'px';
-        cloneElement.style.width = startRect.width + 'px';
-        cloneElement.style.height = startRect.height + 'px';
-
-        overlay.appendChild(cloneElement);
         document.body.appendChild(overlay);
-        document.body.appendChild(btnClose);
 
-        lightboxElement = overlay;
-        cloneImg = cloneElement;
-        closeBtn = btnClose;
+        const bodyOverflow = document.body.style.overflow;
+        const bodyPaddingRight = document.body.style.paddingRight;
+        const scrollbarW = window.innerWidth - document.documentElement.clientWidth;
+        document.body.style.overflow = 'hidden';
+        if (scrollbarW > 0) {
+            document.body.style.paddingRight =
+                (parseFloat(getComputedStyle(document.body).paddingRight) || 0) + scrollbarW + 'px';
+        }
 
-        cloneImg.getBoundingClientRect();
+        lbState = {
+            overlayEl: overlay, cloneEl: clone, originalImg: imgElement,
+            baseRect: { left: finalLeft, top: finalTop, width: finalW, height: finalH },
+            scale: 1, translate: { x: 0, y: 0 },
+            dragStart: { x: 0, y: 0 },
+            isDragging: false, isResetting: false, isZoomAnimating: false,
+            isAnimating: true,
+            initialDistance: 0, initialScale: 1, lastTap: 0, tapTimer: null,
+            resizeHandler: null, escHandler: null,
+            _bodyOverflow: bodyOverflow, _bodyPaddingRight: bodyPaddingRight
+        };
+
+        void clone.offsetWidth;
+
+        clone.style.transition = GEOM_TRANSITION;
+
         requestAnimationFrame(() => {
-            cloneImg.style.top = finalTop + 'px';
-            cloneImg.style.left = finalLeft + 'px';
-            cloneImg.style.width = finalWidth + 'px';
-            cloneImg.style.height = finalHeight + 'px';
-            cloneImg.style.opacity = '1';
-            cloneImg.style.borderRadius = '10px';
-            overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.85)';
-            overlay.style.backdropFilter = 'blur(12px)';
-            btnClose.style.opacity = '1';
+            if (!lbState) return;
+            overlay.classList.add('is-open');
+            clone.style.left = finalLeft + 'px';
+            clone.style.top = finalTop + 'px';
+            clone.style.width = finalW + 'px';
+            clone.style.height = finalH + 'px';
+            clone.style.borderRadius = CLONE_RADIUS_END;
         });
 
-        const onOpenEnd = () => {
-            if (cloneImg) cloneImg.removeEventListener('transitionend', onOpenEnd);
-            isAnimating = false;
-            activeLightbox = true;
+        const finishOpen = () => {
+            if (!lbState || !lbState.isAnimating) return;
+            lbState.isAnimating = false;
             bindZoomEvents();
-            resetTransform();
         };
-        cloneImg.addEventListener('transitionend', onOpenEnd, { once: true });
+        const onTE = (e) => {
+            if (e.target !== clone || e.propertyName !== 'left') return;
+            clone.removeEventListener('transitionend', onTE);
+            finishOpen();
+        };
+        clone.addEventListener('transitionend', onTE);
         setTimeout(() => {
-            if (cloneImg && !activeLightbox) {
-                activeLightbox = true;
-                isAnimating = false;
-                bindZoomEvents();
-                resetTransform();
+            if (lbState && lbState.isAnimating) {
+                clone.removeEventListener('transitionend', onTE);
+                finishOpen();
             }
-        }, 450);
-
-        activeLightbox = true;
-        isAnimating = true;
+        }, GEOM_TIMEOUT);
 
         overlay.addEventListener('click', (e) => {
-            if (!activeLightbox || isAnimating) return;
-            if (e.target === overlay) {
-                e.stopPropagation();
-                closeLightbox(false);
-            }
+            if (!lbState || lbState.isAnimating) return;
+            if (e.target === overlay) { e.stopPropagation(); closeLightbox(false); }
         });
-
-        btnClose.addEventListener('click', (e) => {
+        const closeBtn = overlay.querySelector('.lightbox-close-btn');
+        closeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (!activeLightbox || isAnimating) return;
+            if (!lbState || lbState.isAnimating) return;
             closeLightbox(false);
         });
 
-        escHandler = (e) => {
-            if (e.key === 'Escape' && activeLightbox && !isAnimating) {
+        lbState.escHandler = (e) => {
+            if (e.key === 'Escape' && lbState && !lbState.isAnimating) {
                 e.preventDefault();
                 closeLightbox(false);
             }
         };
-        window.addEventListener('keydown', escHandler);
+        window.addEventListener('keydown', lbState.escHandler);
 
-        resizeHandler = () => {
-            if (activeLightbox && !isAnimating) closeLightbox(true);
+        lbState.resizeHandler = () => {
+            if (lbState && !lbState.isAnimating) closeLightbox(true);
         };
-        window.addEventListener('resize', resizeHandler);
+        window.addEventListener('resize', lbState.resizeHandler);
+    }
+
+    function closeLightbox(skipAnimation) {
+        if (!lbState) return;
+        if (lbState.isAnimating && !skipAnimation) return;
+
+        const { overlayEl, cloneEl, originalImg } = lbState;
+
+        if (lbState.resizeHandler) { window.removeEventListener('resize', lbState.resizeHandler); lbState.resizeHandler = null; }
+        if (lbState.escHandler) { window.removeEventListener('keydown', lbState.escHandler); lbState.escHandler = null; }
+        unbindZoomEvents();
+
+        if (skipAnimation || !overlayEl || !cloneEl || !originalImg) {
+            destroyOverlay();
+            return;
+        }
+
+        const startRect = getRect(originalImg);
+        if (!startRect.width || !startRect.height) { destroyOverlay(); return; }
+
+        lbState.isAnimating = true;
+        overlayEl.classList.remove('is-open');
+        cloneEl.classList.remove('zoomed', 'dragging');
+
+        cloneEl.style.transition = 'none';
+        cloneEl.style.transform = '';
+        void cloneEl.offsetWidth;
+
+        cloneEl.style.transition = GEOM_TRANSITION;
+
+        cloneEl.style.left = startRect.left + 'px';
+        cloneEl.style.top = startRect.top + 'px';
+        cloneEl.style.width = startRect.width + 'px';
+        cloneEl.style.height = startRect.height + 'px';
+        cloneEl.style.borderRadius = CLONE_RADIUS_START;
+
+        const onEnd = (e) => {
+            if (e.target !== cloneEl || e.propertyName !== 'left') return;
+            cloneEl.removeEventListener('transitionend', onEnd);
+            destroyOverlay();
+        };
+        cloneEl.addEventListener('transitionend', onEnd);
+        setTimeout(() => { if (lbState) destroyOverlay(); }, GEOM_TIMEOUT);
     }
 
     function initLightbox(selector = '.lightbox-img') {
-        const handleGlobalClick = (e) => {
+        const handle = (e) => {
+            if (lbState) return;
             const img = e.target.closest(selector);
-            if (img && img.tagName === 'IMG' && !activeLightbox && !isAnimating) {
-                e.preventDefault();
-                openLightbox(img);
-            }
+            if (img && img.tagName === 'IMG') { e.preventDefault(); openLightbox(img); }
         };
-        document.body.addEventListener('click', handleGlobalClick);
-        return function destroy() {
-            document.body.removeEventListener('click', handleGlobalClick);
-        };
+        document.body.addEventListener('click', handle);
+        return function destroy() { document.body.removeEventListener('click', handle); };
     }
 
-    // 暴露全局 API
-    global.Lightbox = {
-        init: initLightbox,
-        open: openLightbox,
-        close: closeLightbox,
-    };
+    global.Lightbox = { init: initLightbox, open: openLightbox, close: closeLightbox };
 
 })(window);
